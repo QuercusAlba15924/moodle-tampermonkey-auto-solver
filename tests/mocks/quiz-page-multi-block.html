@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock: Multiple Question Blocks</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div id="page-wrapper" class="container">
+    <header id="page-header">
+        <h1>Cloud Computing</h1> <!-- Course Name -->
+        <h2>Lab 1 Quiz</h2> <!-- Quiz title -->
+    </header>
+
+    <div id="page-content">
+        <div id="region-main">
+            <div role="main">
+                <span id="maincontent"></span>
+
+                <form action="#" method="post" id="responseform">
+                    <!-- Question 1: Multiple Choice -->
+                    <div id="question-1" class="que multichoice">
+                        <div class="info">
+                            <h3 class="no">Question <span class="qno">1</span></h3>
+                            <div class="state">Not yet answered</div>
+                        </div>
+                        <div class="content">
+                            <div class="qtext">
+                                <p>Which of the following are cloud service models?</p>
+                            </div>
+                            <fieldset class="ablock">
+                                <legend class="prompt h6 fw-normal ">Select one or more:</legend>
+                                <div class="answer">
+                                    <div class="r0">
+                                        <input type="checkbox" name="q1_choice0" value="1" id="q1_choice0">
+                                        <div class="d-flex w-auto flex-fill" id="q1_choice0_label" data-region="answer-label">
+                                            <span class="answernumber">a. </span>
+                                            <div class="flex-fill ms-1">IaaS (Infrastructure as a Service)</div>
+                                        </div>
+                                    </div>
+                                    <div class="r1">
+                                        <input type="checkbox" name="q1_choice1" value="1" id="q1_choice1">
+                                        <div class="d-flex w-auto flex-fill" id="q1_choice1_label" data-region="answer-label">
+                                            <span class="answernumber">b. </span>
+                                            <div class="flex-fill ms-1">SaaS (Software as a Service)</div>
+                                        </div>
+                                    </div>
+                                    <div class="r0">
+                                        <input type="checkbox" name="q1_choice2" value="1" id="q1_choice2">
+                                        <div class="d-flex w-auto flex-fill" id="q1_choice2_label" data-region="answer-label">
+                                            <span class="answernumber">c. </span>
+                                            <div class="flex-fill ms-1">VaaS (Virtualization as a Service)</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </fieldset>
+                        </div>
+                    </div>
+
+                    <hr style="margin: 3rem 0; opacity: 0.1;">
+
+                    <!-- Question 2: Matching -->
+                    <div id="question-2" class="que match">
+                        <div class="info">
+                            <h3 class="no">Question <span class="qno">2</span></h3>
+                            <div class="state">Not yet answered</div>
+                        </div>
+                        <div class="content">
+                            <div class="qtext">
+                                <p>Match the vendor with their primary cloud platform:</p>
+                            </div>
+                            <div class="ablock">
+                                <table class="answer table-reboot">
+                                    <tbody>
+                                        <tr class="r0">
+                                            <td class="text">Amazon</td>
+                                            <td class="control">
+                                                <select class="select">
+                                                    <option value="0">Choose...</option>
+                                                    <option value="1">Azure</option>
+                                                    <option value="2">AWS</option>
+                                                    <option value="3">GCP</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                        <tr class="r1">
+                                            <td class="text">Microsoft</td>
+                                            <td class="control">
+                                                <select class="select">
+                                                    <option value="0">Choose...</option>
+                                                    <option value="1">Azure</option>
+                                                    <option value="2">AWS</option>
+                                                    <option value="3">GCP</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="submitbtns" style="margin-top: 2rem;">
+                        <input type="submit" name="next" value="Next page" class="mod_quiz-next-nav btn btn-primary">
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

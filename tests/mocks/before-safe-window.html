@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock: Attempt Start</title>
+    <link rel="stylesheet" href="../style.css">
+    <style>
+        .safe-mode-warning {
+            background: #fff8e1;
+            border-left: 4px solid #ffb300;
+            padding: 1rem;
+            margin-bottom: 2rem;
+            font-size: 0.875rem;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+<div id="topofscroll" class="container main-inner">
+    <header id="page-header">
+        <nav aria-label="Navigation">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="#">Mock Subject</a></li>
+                <li class="breadcrumb-item"><a href="#">Topic 7</a></li>
+                <li class="breadcrumb-item"><span>Lab Work #7</span></li>
+            </ol>
+        </nav>
+        <div class="page-header-headings">
+            <h1>Lab Work #7 Mock Test</h1>
+        </div>
+    </header>
+
+    <div id="page-content">
+        <div id="region-main">
+            <div class="safe-mode-warning">
+                <strong>Attention:</strong> This quiz requires a Safe Exam Window. Clicking "Start Attempt" will open the test in a separate pop-up browser window.
+            </div>
+            
+            <div role="main">
+                <div class="tertiary-navigation">
+                    <form id="start_quiz_form" method="post" action="startattempt.php">
+                        <button type="submit" class="btn btn-primary" id="single_button_mock">Start Attempt</button>
+                    </form>
+                </div>
+                <div class="quizinfo mt-3">
+                    <p>Attempts allowed: 1</p>
+                    <p>Time limit: 10 mins</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer id="page-footer">
+        <div class="logininfo">You are logged in as <a href="#">John Doe</a></div>
+    </footer>
+</div>
+
+<script>
+    document.getElementById('start_quiz_form').addEventListener('submit', function(e) {
+        // Prevent default POST navigation to the mock endpoint
+        e.preventDefault();
+        
+        // Simulation of Moodle's "Safe Exam Window" logic
+        const windowFeatures = "width=1000,height=800,scrollbars=yes,status=yes";
+        
+        console.log("[MOCK] Opening simulated Safe Exam Window");
+        
+        // The injector script expects to intercept window.open.
+        // We open the actual mock quiz page instead of 'startattempt.php'.
+        window.open("/mod/quiz/attempt.php?mock=single", "quiz_window", windowFeatures);
+    });
+</script>
+</body>
+</html>

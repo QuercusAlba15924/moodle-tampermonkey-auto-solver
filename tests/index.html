@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moodle Solver / Testing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Moodle Solver <small
+                style="display: block; font-size: 1rem; color: var(--text-muted); margin-top: 0.5rem; font-weight: 400;">Test
+                Engineering & Quality Assurance</small></h1>
+
+        <div class="card-grid">
+            <a href="/mod/quiz/attempt.php?mock=before" class="item-link">
+                <span class="item-title">🚀 Attempt Initialization</span>
+                <span class="item-desc">Mocks the initial page with the 'Start Attempt' button. Validates the window
+                    interception and multi-browser safety logic.</span>
+            </a>
+
+            <a href="/mod/quiz/attempt.php?mock=single" class="item-link">
+                <span class="item-title">📍 Scenario: Single Choice</span>
+                <span class="item-desc">Standard radio button inputs. Validates the core question-answer mapping and
+                    single-selection highlighting.</span>
+            </a>
+
+            <a href="/mod/quiz/attempt.php?mock=multiple" class="item-link">
+                <span class="item-title">📋 Scenario: Multiple Choice</span>
+                <span class="item-desc">High-complexity checkbox inputs. Validates multiple correct answer detection and
+                    sequential clicking jitter.</span>
+            </a>
+
+            <a href="/mod/quiz/attempt.php?mock=matching" class="item-link">
+                <span class="item-title">🔗 Scenario: Matching Choice</span>
+                <span class="item-desc">Dropdown-based matching logic. Validates table-row parsing and dynamic dropdown
+                    selection based on AI labels.</span>
+            </a>
+
+            <a href="/mod/quiz/attempt.php?mock=shortanswer" class="item-link">
+                <span class="item-title">📝 Scenario: Short Answer</span>
+                <span class="item-desc">Text input field. Validates text extraction from AI and input simulation for
+                    shortanswer question types.</span>
+            </a>
+
+            <a href="/mod/quiz/attempt.php?mock=multi-block" class="item-link">
+                <span class="item-title">🧩 Scenario: Multi-Block Page</span>
+                <span class="item-desc">Multiple questions on one page. Validates iterative parsing, isolated block
+                    processing, and sequential AI evaluations.</span>
+            </a>
+        </div>
+    </div>
+
+</body>
+
+</html>

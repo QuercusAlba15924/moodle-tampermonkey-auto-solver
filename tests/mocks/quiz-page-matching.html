@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock: Matching Question</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div id="page-wrapper" class="container">
+    <header id="page-header">
+        <h1>General Science</h1> <!-- Course Name -->
+        <nav aria-label="Navigation">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="#">Astronomy</a></li>
+                <li class="breadcrumb-item"><span>Question 1</span></li>
+            </ol>
+        </nav>
+        <h2>Solar System Quiz</h2> <!-- Quiz title -->
+    </header>
+
+    <div id="page-content">
+        <div id="region-main">
+            <div role="main">
+                <span id="maincontent"></span>
+
+                <div id="quiz-timer-wrapper" style="margin-bottom: 2rem; color: var(--secondary); font-size: 0.8125rem; font-weight: 500;">
+                    ⏳ Time remaining: 0:08:15
+                </div>
+
+                <form action="#" method="post" id="responseform">
+                    <div id="question-1" class="que match">
+                        <div class="info">
+                            <h3 style="margin: 0 0 1rem 0; font-size: 0.875rem; text-transform: uppercase; color: var(--secondary);">Question 1</h3>
+                        </div>
+                        <div class="content">
+                            <div class="qtext">
+                                <p>Match each planet with its characteristic:</p>
+                            </div>
+                            <div class="ablock">
+                                <table class="answer table-reboot">
+                                    <tbody>
+                                        <tr class="r0">
+                                            <td class="text"><p>Red Planet</p></td>
+                                            <td class="control">
+                                                <select class="select">
+                                                    <option selected="selected" value="0">Choose...</option>
+                                                    <option value="1">Mars</option>
+                                                    <option value="2">Jupiter</option>
+                                                    <option value="3">Venus</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                        <tr class="r1">
+                                            <td class="text"><p>Largest Planet</p></td>
+                                            <td class="control">
+                                                <select class="select">
+                                                    <option selected="selected" value="0">Choose...</option>
+                                                    <option value="1">Mars</option>
+                                                    <option value="2">Jupiter</option>
+                                                    <option value="3">Venus</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                        <tr class="r0">
+                                            <td class="text"><p>Hottest Planet</p></td>
+                                            <td class="control">
+                                                <select class="select">
+                                                    <option selected="selected" value="0">Choose...</option>
+                                                    <option value="1">Mars</option>
+                                                    <option value="2">Jupiter</option>
+                                                    <option value="3">Venus</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="submitbtns" style="margin-top: 1rem;">
+                        <input type="submit" name="next" value="Next page" class="mod_quiz-next-nav btn btn-primary" id="mod_quiz-next-nav">
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock: Single Choice</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div id="page-wrapper" class="container">
+    <header id="page-header">
+        <nav aria-label="Navigation">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="#">Mock Subject</a></li>
+                <li class="breadcrumb-item"><span>Question 1</span></li>
+            </ol>
+        </nav>
+        <h1>Mock Quiz Session</h1>
+    </header>
+
+    <div id="page-content">
+        <div id="region-main">
+            <div role="main">
+                <div id="quiz-timer-wrapper" style="margin-bottom: 2rem; color: var(--secondary); font-size: 0.8125rem; font-weight: 500;">
+                    ⏳ Time remaining: 0:09:41
+                </div>
+
+                <form action="#" method="post" id="responseform">
+                    <div id="question-1" class="que multichoice">
+                        <div class="info">
+                            <h3 style="margin: 0 0 1rem 0; font-size: 0.875rem; text-transform: uppercase; color: var(--secondary);">Question 1</h3>
+                        </div>
+                        <div class="content">
+                            <div class="qtext">
+                                <p>What is the capital of France?</p>
+                            </div>
+                            <div class="answer">
+                                <div class="r0">
+                                    <input type="radio" name="q1_answer" value="0" id="q1_a0">
+                                    <label for="q1_a0">
+                                        <span class="answernumber">a.</span>
+                                        <span>London</span>
+                                    </label>
+                                </div>
+                                <div class="r1">
+                                    <input type="radio" name="q1_answer" value="1" id="q1_a1">
+                                    <label for="q1_a1">
+                                        <span class="answernumber">b.</span>
+                                        <span>Paris</span>
+                                    </label>
+                                </div>
+                                <div class="r0">
+                                    <input type="radio" name="q1_answer" value="2" id="q1_a2">
+                                    <label for="q1_a2">
+                                        <span class="answernumber">c.</span>
+                                        <span>Berlin</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
