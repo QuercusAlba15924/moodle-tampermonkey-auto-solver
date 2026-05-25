@@ -1,7 +1,7 @@
 # Moodle AI Auto-Solver
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-1.5.5-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-1.6.0-blue.svg)]()
 
 An advanced, context-aware Tampermonkey userscript that autonomously solves Moodle quizzes using Google Gemini AI. It features multi-turn error correction, sophisticated human-like interaction delays, and a modular architecture.
 
@@ -67,9 +67,15 @@ To adapt this script for a non-Moodle platform, you only need to rewrite the `Pa
 
 ### GUI Configuration
 The script injects a floating UI panel in the top-right corner of Moodle quizzes.
-- **Primary & Fallback Models**: Seamlessly switch between `gemini-3.1-flash-lite-preview` and `gemma-4-31b-it`.
+- **Primary & Fallback Models**: Seamlessly switch between models like `gemini-3.1-flash-lite` and `gemma-4-31b-it`.
 - **Extra Context**: Inject specific knowledge (e.g., "This quiz is about Spring Framework Annotations") into the prompt dynamically.
+- **Temperature Control**: Adjust the model's temperature (default `0.2`) to enforce strict formatting compliance without sacrificing reasoning capabilities.
 - **Auto-Submit**: Toggle automatic test submission on the summary page.
+
+### Troubleshooting
+**Error: `Routine failed: Unexpected API Error: HTTP 404`**
+If you see this error in the console after updating the script to a new version, it is likely because an outdated model name (e.g., `gemini-3.1-flash-lite-preview`) is still cached in your browser's local storage.
+* **Fix**: Open the script's GUI panel on the Moodle page, change the **Primary** model to any other option, and then switch it back to your desired model. This simple toggle forces the script to overwrite the old cached configuration with the newly available model names.
 
 ---
 
@@ -85,6 +91,14 @@ npm install
 npm start
 ```
 Navigate to `http://localhost:3000/tests/index.html` to access the testing dashboard.
+
+### Model Discovery
+To check which Google Generative AI models are currently available via the API, you can run the built-in discovery script. I also recommend checking the Rate Limits on the “Rate Limit” page in Google AI Studio before adding a model, if you're using the free API.
+Ensure your `.env` file contains your `GEMINI_API_KEY`, then run:
+
+```bash
+npm run test-models
+```
 
 ---
 

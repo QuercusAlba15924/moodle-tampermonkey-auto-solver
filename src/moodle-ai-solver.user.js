@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moodle AI Auto-Solver (High-Velocity & Context Aware)
 // @namespace    http://tampermonkey.net/
-// @version      1.5.5
+// @version      1.6.0
 // @description  Optimized Moodle solver with context awareness, forced delays, and modal auto-submit.
 // @author       QuercusAlba15924
 // @author       Gemini 3.1 Pro, Gemini 3.0 Flash, Claude 4.6 Opus Thinking
@@ -16,19 +16,22 @@
 (function () {
     'use strict';
 
+
     let IS_PAUSED = false;
 
     const STORAGE_KEYS = {
         CONFIG: 'moodle_ai_config_v2',
         HISTORY: 'moodle_ai_history_v2',
         ERROR_LOG: 'moodle_ai_error_log',
-        API: 'gemini_api_key'
+        API: 'gemini_api_key',
+        PAUSED: 'moodle_ai_paused_state'
     };
 
     const CONFIG = {
-        MODEL: 'gemini-3.1-flash-lite-preview',
+        MODEL: 'gemini-3.1-flash-lite',
         FALLBACK_MODEL: 'gemma-4-31b-it',
         EXTRA_CONTEXT: '',
+        TEMPERATURE: 0.2, // WARNING: Higher values may lead to format hallucinations
 
         HIGHLIGHT_GREEN: true,
         RETRY_DELAY_MS: 15000,
@@ -463,7 +466,10 @@
          */
         _callModel: async (modelName, contents, apiKey) => {
             const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-            const payload = { contents };
+            const payload = {
+                contents,
+                generationConfig: { temperature: parseFloat(CONFIG.TEMPERATURE) || 0.2 } // Fallback
+            };
 
             const response = await fetch(endpoint, {
                 method: 'POST',
@@ -508,13 +514,19 @@
             const primaryResult = await AIClient._callModel(modelName, contents, apiKey);
             if (primaryResult.ok) return primaryResult.text;
 
-            // 503 = Model overloaded: try fallback model
-            if (primaryResult.status === 503 && CONFIG.FALLBACK_MODEL) {
-                Logger.warn(`Model (${modelName}) unavailable (503). Switching to fallback: ${CONFIG.FALLBACK_MODEL}`);
-                const fallbackResult = await AIClient._callModel(CONFIG.FALLBACK_MODEL, contents, apiKey);
-                if (fallbackResult.ok) return fallbackResult.text;
+            // 503 = Model overloaded: retry a few times before fallback
+            if (primaryResult.status === 503) {
+                if (attempt <= CONFIG.MAX_RETRIES) {
+                    Logger.warn(`Model (${modelName}) unavailable (503). Retrying in ${CONFIG.RETRY_DELAY_MS / 1000}s... (Attempt ${attempt}/${CONFIG.MAX_RETRIES})`);
+                    await Utils.sleep(CONFIG.RETRY_DELAY_MS);
+                    return await AIClient._executeWithModelLogic(modelName, contents, apiKey, questionData, attempt + 1);
+                } else if (CONFIG.FALLBACK_MODEL) {
+                    Logger.warn(`Model (${modelName}) unavailable (503) after retries. Switching to fallback: ${CONFIG.FALLBACK_MODEL}`);
+                    const fallbackResult = await AIClient._callModel(CONFIG.FALLBACK_MODEL, contents, apiKey);
+                    if (fallbackResult.ok) return fallbackResult.text;
 
-                throw new Error(`Both models failed. Primary: 503, Fallback (${CONFIG.FALLBACK_MODEL}): ${fallbackResult.status}`);
+                    throw new Error(`Both models failed. Primary: 503, Fallback (${CONFIG.FALLBACK_MODEL}): ${fallbackResult.status}`);
+                }
             }
 
             // 429 = Rate Limit: retry after cooldown
@@ -747,16 +759,19 @@
                 #ai-config-panel {
                     position: fixed; top: 10px; right: 10px; width: 220px;
                     background: #0f172a; border: 1px solid #334155; border-radius: 0px;
-                    color: #fff; font-family: monospace;
+                    color: #fff; font-family: monospace; color-scheme: dark;
                     z-index: 10000; padding: 10px;
                 }
-                #ai-config-panel.minimized { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; background: #334155; }
+                #ai-config-panel.minimized { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; }
                 #ai-config-panel h3 { margin: 0 0 8px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 4px; text-transform: uppercase; }
                 .config-row { margin-bottom: 6px; display: flex; flex-direction: column; }
                 .config-row label { font-size: 9px; color: #64748b; margin-bottom: 2px; }
                 .config-row select, .config-row input {
                     background: #1e293b; border: 1px solid #334155;
                     border-radius: 0; color: #38bdf8; padding: 3px; font-size: 10px; outline: none;
+                }
+                .config-row input[type="number"]::-webkit-inner-spin-button {
+                    opacity: 1; filter: invert(0.8); cursor: pointer;
                 }
                 .config-check { flex-direction: row; align-items: center; gap: 6px; }
                 .config-check input { width: 12px; height: 12px; margin: 0; }
@@ -776,27 +791,29 @@
         init: () => {
             ConfigUI._injectStyles();
             Utils.loadConfig();
+            IS_PAUSED = GM_Wrapper.getValue(STORAGE_KEYS.PAUSED, false);
 
             const panel = document.createElement('div');
             panel.id = 'ai-config-panel';
             if (GM_Wrapper.getValue('ai_config_minimized', false)) panel.classList.add('minimized');
 
             const modelOptions = [
-                'gemini-3.1-flash-lite-preview',
+                'gemini-3.1-flash-lite',
+                'gemini-3.5-flash',
                 'gemma-4-31b-it',
-                'gemma-3-27b-it'
+                'gemma-4-26b-a4b-it'
             ].map(m => `<option value="${m}" ${CONFIG.MODEL === m ? 'selected' : ''}>${m}</option>`).join('');
 
             const fallbackOptions = [
                 'gemma-4-31b-it',
-                'gemini-3.1-flash-lite-preview',
-                'gemma-3-27b-it'
+                'gemma-4-26b-a4b-it',
+                'gemini-3.1-flash-lite'
             ].map(m => `<option value="${m}" ${CONFIG.FALLBACK_MODEL === m ? 'selected' : ''}>${m}</option>`).join('');
 
             panel.innerHTML = `
                 <div id="ai-gui-toggle" style="cursor:pointer; font-size:14px; margin-bottom: 5px;">${GM_Wrapper.getValue('ai_config_minimized', false) ? '⚙️' : '[HIDE]'}</div>
                 <div id="ai-config-content">
-                    <h3>SOLVER v1.5.5</h3>
+                    <h3>SOLVER v1.6.0</h3>
                     <div class="config-row">
                         <label>Primary</label>
                         <select class="cfg-auto" id="cfg-model">${modelOptions}</select>
@@ -808,6 +825,10 @@
                     <div class="config-row">
                         <label>Extra Context</label>
                         <input class="cfg-auto" type="text" id="cfg-context" value="${CONFIG.EXTRA_CONTEXT || ''}">
+                    </div>
+                    <div class="config-row">
+                        <label>Temperature (0.0 - 2.0)</label>
+                        <input class="cfg-auto" type="number" step="0.1" min="0" max="2" id="cfg-temp" value="${CONFIG.TEMPERATURE || 0.2}">
                     </div>
                     <div class="config-row config-check">
                         <input class="cfg-auto" type="checkbox" id="cfg-highlight" ${CONFIG.HIGHLIGHT_GREEN ? 'checked' : ''}>
@@ -836,7 +857,7 @@
             const stopBtn = document.getElementById('ai-config-stop');
             stopBtn.onclick = () => {
                 IS_PAUSED = !IS_PAUSED;
-                GM_Wrapper.setValue('moodle_ai_is_paused', IS_PAUSED);
+                GM_Wrapper.setValue(STORAGE_KEYS.PAUSED, IS_PAUSED);
                 stopBtn.innerText = IS_PAUSED ? 'RESUME' : 'STOP';
                 stopBtn.classList.toggle('paused', IS_PAUSED);
             };
@@ -847,6 +868,7 @@
                     CONFIG.MODEL = document.getElementById('cfg-model').value;
                     CONFIG.FALLBACK_MODEL = document.getElementById('cfg-fb-model').value;
                     CONFIG.EXTRA_CONTEXT = document.getElementById('cfg-context').value;
+                    CONFIG.TEMPERATURE = parseFloat(document.getElementById('cfg-temp').value) || 0.2;
                     CONFIG.HIGHLIGHT_GREEN = document.getElementById('cfg-highlight').checked;
                     CONFIG.AUTO_SUBMIT_TEST = document.getElementById('cfg-autosubmit').checked;
                     CONFIG.ENABLE_FORCED_DELAY = document.getElementById('cfg-forced').checked;

@@ -1,4 +1,15 @@
+# Dependencies
 node_modules/
+
+# Logs
 *.log
+
+# macOS
 .DS_Store
+
+# Temporary files
 merged_result.txt
+temp/*
+
+# Environment variables (testing)
+.env

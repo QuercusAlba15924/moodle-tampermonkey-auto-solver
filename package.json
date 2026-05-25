@@ -1,13 +1,15 @@
 {
   "name": "moodle-solver-test-server",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "description": "Simple HTTP Server for testing Moodle Solver",
   "scripts": {
     "start": "node tests/server.js",
     "test": "node tests/server.js",
-    "dev": "node tests/server.js"
+    "dev": "node tests/server.js",
+    "test-models": "node scripts/test-models.js"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "jsdom": "^29.0.2"
   }
 }
