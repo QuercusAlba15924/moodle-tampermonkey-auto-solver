@@ -64,8 +64,22 @@ async function discoverModels() {
         } else {
             console.log(" * No models found in this category.");
         }
-        
-        console.log("\nAction Required: Update the CONFIG object in 'src/moodle-ai-solver.user.js' with the desired model names.");
+
+        const v170Models = [
+            { id: 'gemini-3.5-flash-lite', role: 'Default Primary' },
+            { id: 'gemini-3.1-flash-lite', role: 'Default Fallback' },
+            { id: 'gemma-4-31b-it', role: 'Available' },
+            { id: 'gemma-4-26b-a4b-it', role: 'Available' },
+            { id: 'gemini-3.8-flash', role: 'Available' }
+        ];
+
+        console.log("\nSTATUS: Solver v1.7.0 Supported Models (AVAILABLE_MODELS)");
+        console.log("========================================================");
+        const availableSet = new Set(models.map(m => m.name.replace('models/', '')));
+        v170Models.forEach(({ id, role }) => {
+            const isOnline = availableSet.has(id);
+            console.log(` * [${isOnline ? 'ONLINE' : 'MISSING'}] ${id} (${role})`);
+        });
 
     } catch (error) {
         console.error("Fatal Error: Request to Google API failed.", error);

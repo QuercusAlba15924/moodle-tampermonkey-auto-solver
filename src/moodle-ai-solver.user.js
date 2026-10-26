@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moodle AI Auto-Solver (High-Velocity & Context Aware)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Optimized Moodle solver with context awareness, forced delays, and modal auto-submit.
 // @author       QuercusAlba15924
 // @author       Gemini 3.1 Pro, Gemini 3.0 Flash, Claude 4.6 Opus Thinking
@@ -24,18 +24,36 @@
         HISTORY: 'moodle_ai_history_v2',
         ERROR_LOG: 'moodle_ai_error_log',
         API: 'gemini_api_key',
-        PAUSED: 'moodle_ai_paused_state'
+        PAUSED: 'moodle_ai_paused_state',
+        KEY_STATE: 'moodle_ai_key_state_v1'
+    };
+
+    const AVAILABLE_MODELS = [
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+        'gemma-4-31b-it',
+        'gemma-4-26b-a4b-it',
+        'gemini-3.8-flash'
+    ];
+
+    const MODEL_MIGRATION_MAP = {
+        'gemini-3.5-flash': 'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite'
     };
 
     const CONFIG = {
-        MODEL: 'gemini-3.1-flash-lite',
-        FALLBACK_MODEL: 'gemma-4-31b-it',
+        MODEL: 'gemini-3.5-flash-lite',
+        FALLBACK_MODEL: 'gemini-3.1-flash-lite',
+        API_KEYS: [],
+        KEY_STRATEGY: 'exhaust', // 'exhaust' | 'round_robin'
         EXTRA_CONTEXT: '',
-        TEMPERATURE: 0.2, // WARNING: Higher values may lead to format hallucinations
+        TEMPERATURE: 0.2,
 
         HIGHLIGHT_GREEN: true,
-        RETRY_DELAY_MS: 15000,
-        MAX_RETRIES: 3,
+        BACKOFF_BASE_MS: 5000,     // 5s -> 10s -> 20s -> 40s -> 80s -> 120s
+        BACKOFF_MAX_MS: 120000,    // Max 2 minutes per backoff wave
+        MAX_BACKOFF_WAVES: 6,
+        REQUEST_TIMEOUT_MS: 30000,
         MAX_PARSE_RETRIES: 2,
         MAX_ERROR_LOG_ENTRIES: 100,
 
@@ -177,12 +195,11 @@
         ].join('\n'),
 
         RETRY_SHORTANSWER: [
-            `Your response above could NOT be parsed. It did not contain the answer in [text] format.`,
+            `Your response above could NOT be parsed. It did not contain the answer in the required FINAL_ANSWER: [text] format.`,
             ``,
             `Look at your own analysis above and extract the answer.`,
-            `Respond with ONLY the answer in square brackets. Nothing else.`,
-            ``,
-            `CORRECT format: [Paris]`,
+            `Respond with ONLY the final answer line in this exact format:`,
+            `FINAL_ANSWER: [Paris]`,
         ].join('\n'),
     };
 
@@ -269,6 +286,40 @@
         getRandomDelay: (min, max) => Math.floor(Math.random() * (max - min + 1) + min),
         sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
+        setStatus: (text, color = '#94a3b8') => {
+            const el = document.getElementById('ai-status-text');
+            if (el) {
+                el.innerText = text;
+                el.style.color = color;
+            }
+        },
+
+        sleepWithCountdown: async (totalMs, labelPrefix = 'Waiting') => {
+            let remainingMs = totalMs;
+            while (remainingMs > 0) {
+                while (IS_PAUSED) {
+                    Utils.setStatus('PAUSED', '#eab308');
+                    await Utils.sleep(500);
+                }
+                const secs = Math.ceil(remainingMs / 1000);
+                Utils.setStatus(`${labelPrefix}: ${secs}s...`, '#f59e0b');
+                const step = Math.min(1000, remainingMs);
+                await Utils.sleep(step);
+                remainingMs -= step;
+            }
+        },
+
+        parseKeysInput: (rawText) => {
+            if (!rawText) return [];
+            if (Array.isArray(rawText)) {
+                return rawText.map(k => String(k).trim()).filter(Boolean);
+            }
+            return String(rawText)
+                .split(/[\n,;]+/)
+                .map(k => k.trim())
+                .filter(Boolean);
+        },
+
         loadConfig: () => {
             const saved = GM_Wrapper.getValue(STORAGE_KEYS.CONFIG, {});
             for (const key of Object.keys(saved)) {
@@ -276,23 +327,56 @@
                     CONFIG[key] = saved[key];
                 }
             }
+
+            // 1. Auto-migrate deprecated model names
+            if (MODEL_MIGRATION_MAP[CONFIG.MODEL]) {
+                CONFIG.MODEL = MODEL_MIGRATION_MAP[CONFIG.MODEL];
+            }
+            if (MODEL_MIGRATION_MAP[CONFIG.FALLBACK_MODEL]) {
+                CONFIG.FALLBACK_MODEL = MODEL_MIGRATION_MAP[CONFIG.FALLBACK_MODEL];
+            }
+            if (!AVAILABLE_MODELS.includes(CONFIG.MODEL)) {
+                Logger.warn(`Deprecated primary model "${CONFIG.MODEL}" in storage. Resetting to default.`);
+                CONFIG.MODEL = 'gemini-3.5-flash-lite';
+            }
+            if (!AVAILABLE_MODELS.includes(CONFIG.FALLBACK_MODEL)) {
+                Logger.warn(`Deprecated fallback model "${CONFIG.FALLBACK_MODEL}" in storage. Resetting to default.`);
+                CONFIG.FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+            }
+
+            // 2. Normalize & Auto-migrate legacy single API key into CONFIG.API_KEYS
+            CONFIG.API_KEYS = Utils.parseKeysInput(CONFIG.API_KEYS);
+            const legacyKey = GM_Wrapper.getValue(STORAGE_KEYS.API, '');
+            if (CONFIG.API_KEYS.length === 0 && legacyKey && typeof legacyKey === 'string' && legacyKey.trim()) {
+                CONFIG.API_KEYS = Utils.parseKeysInput(legacyKey);
+                Logger.info('Migrated legacy API key to multi-key storage.');
+            }
+
+            Utils.saveConfig();
         },
 
         saveConfig: () => {
             GM_Wrapper.setValue(STORAGE_KEYS.CONFIG, CONFIG);
+            // Keep first key in legacy slot for backward compatibility
+            if (CONFIG.API_KEYS.length > 0) {
+                GM_Wrapper.setValue(STORAGE_KEYS.API, CONFIG.API_KEYS[0]);
+            }
         },
 
-        getApiKey: () => {
-            let key = GM_Wrapper.getValue(STORAGE_KEYS.API, '');
-            if (!key) {
-                key = prompt('Moodle AI Solver Initialization:\nPlease provide your Google Gemini API Key:');
-                if (key && key.trim()) {
-                    GM_Wrapper.setValue(STORAGE_KEYS.API, key.trim());
-                } else {
-                    throw new Error('Key missing.');
-                }
+        ensureApiKeys: () => {
+            if (CONFIG.API_KEYS && CONFIG.API_KEYS.length > 0) {
+                return CONFIG.API_KEYS;
             }
-            return key;
+            const input = prompt('Moodle AI Solver Initialization:\nPlease provide one or more Google Gemini API Keys (comma or newline separated):');
+            const parsed = Utils.parseKeysInput(input);
+            if (parsed.length > 0) {
+                CONFIG.API_KEYS = parsed;
+                Utils.saveConfig();
+                const keysTextarea = document.getElementById('cfg-keys');
+                if (keysTextarea) keysTextarea.value = parsed.join('\n');
+                return CONFIG.API_KEYS;
+            }
+            throw new Error('No API keys provided.');
         }
     };
 
@@ -400,11 +484,125 @@
 
     // IMPORTANT: Use fetch instead of GM_xmlhttpRequest to avoid error 503 (service unavaliable).
 
+    const KeyManager = {
+        _maskKey: (key) => key.length > 8 ? `...${key.slice(-4)}` : 'key',
+
+        _getState: () => {
+            return GM_Wrapper.getValue(STORAGE_KEYS.KEY_STATE, {
+                roundRobinIndex: 0,
+                invalidKeys: {}, // { [apiKey]: timestamp }
+                pairs: {}        // { ["apiKey::model"]: { cooldownUntil: 0, strikes: 0 } }
+            });
+        },
+
+        _saveState: (state) => {
+            GM_Wrapper.setValue(STORAGE_KEYS.KEY_STATE, state);
+        },
+
+        _pairId: (apiKey, modelName) => `${apiKey}::${modelName}`,
+
+        markSuccess: (apiKey, modelName) => {
+            const state = KeyManager._getState();
+            const pid = KeyManager._pairId(apiKey, modelName);
+            if (state.pairs && state.pairs[pid]) {
+                state.pairs[pid].strikes = 0;
+                state.pairs[pid].cooldownUntil = 0;
+                KeyManager._saveState(state);
+            }
+        },
+
+        markRateLimited: (apiKey, modelName) => {
+            const state = KeyManager._getState();
+            const pid = KeyManager._pairId(apiKey, modelName);
+            state.pairs = state.pairs || {};
+            const current = state.pairs[pid] || { strikes: 0, cooldownUntil: 0 };
+            current.strikes += 1;
+
+            // Adaptive cooldown: 1m (RPM) -> 5m -> 15m -> 60m (RPD exhausted)
+            const scheduleSec = [60, 300, 900, 3600];
+            const durationSec = scheduleSec[Math.min(current.strikes - 1, scheduleSec.length - 1)];
+            current.cooldownUntil = Date.now() + durationSec * 1000;
+
+            state.pairs[pid] = current;
+            KeyManager._saveState(state);
+            Logger.warn(`Rate limit (429) on Key(${KeyManager._maskKey(apiKey)}) + [${modelName}]. Cooldown: ${durationSec}s (Strike ${current.strikes}).`);
+        },
+
+        markServerOverloaded: (apiKey, modelName) => {
+            const state = KeyManager._getState();
+            const pid = KeyManager._pairId(apiKey, modelName);
+            state.pairs = state.pairs || {};
+            const current = state.pairs[pid] || { strikes: 0, cooldownUntil: 0 };
+            // Short 20s cooldown on 503/timeout so script immediately tries Fallback, then returns to Primary later
+            current.cooldownUntil = Date.now() + 20000;
+            state.pairs[pid] = current;
+            KeyManager._saveState(state);
+            Logger.warn(`Server overloaded/timeout (503) on Key(${KeyManager._maskKey(apiKey)}) + [${modelName}]. Temporary 20s cooldown.`);
+        },
+
+        markKeyInvalid: (apiKey, status) => {
+            const state = KeyManager._getState();
+            state.invalidKeys = state.invalidKeys || {};
+            // Ban invalid/revoked key for 1 hour
+            state.invalidKeys[apiKey] = Date.now() + 3600 * 1000;
+            KeyManager._saveState(state);
+            Logger.error(`Key(${KeyManager._maskKey(apiKey)}) returned HTTP ${status} (Invalid/Forbidden). Disabling key.`);
+        },
+
+        /**
+         * Builds the ordered execution plan of { apiKey, keyIndex, modelName } pairs:
+         * K_start(Primary) -> K_start(Fallback) -> K_next(Primary) -> K_next(Fallback)...
+         */
+        buildExecutionPlan: (ignoreCooldowns = false, advanceRoundRobin = false) => {
+            const keys = Utils.ensureApiKeys();
+            const state = KeyManager._getState();
+            const now = Date.now();
+
+            let startIndex = 0;
+            if (CONFIG.KEY_STRATEGY === 'round_robin' && keys.length > 1) {
+                startIndex = (state.roundRobinIndex || 0) % keys.length;
+                if (advanceRoundRobin) {
+                    state.roundRobinIndex = (startIndex + 1) % keys.length;
+                    KeyManager._saveState(state);
+                }
+            }
+
+            const models = [CONFIG.MODEL];
+            if (CONFIG.FALLBACK_MODEL && CONFIG.FALLBACK_MODEL !== CONFIG.MODEL) {
+                models.push(CONFIG.FALLBACK_MODEL);
+            }
+
+            const plan = [];
+            for (let offset = 0; offset < keys.length; offset++) {
+                const keyIdx = (startIndex + offset) % keys.length;
+                const apiKey = keys[keyIdx];
+
+                // Skip globally invalid keys unless all keys were marked invalid
+                if (state.invalidKeys && state.invalidKeys[apiKey] && state.invalidKeys[apiKey] > now) {
+                    continue;
+                }
+
+                for (const modelName of models) {
+                    const pid = KeyManager._pairId(apiKey, modelName);
+                    const pairState = state.pairs && state.pairs[pid];
+                    const isCoolingDown = pairState && pairState.cooldownUntil > now;
+
+                    if (!isCoolingDown || ignoreCooldowns) {
+                        plan.push({
+                            apiKey,
+                            keyIndex: keyIdx + 1,
+                            totalKeys: keys.length,
+                            modelName
+                        });
+                    }
+                }
+            }
+
+            return plan;
+        }
+    };
 
     const AIClient = {
-        /**
-         * Builds the prompt string from question data.
-         */
         _buildPrompt: (q) => {
             const role = `<role>\n${PROMPTS.SYSTEM_ROLE}\n</role>\n\n`;
 
@@ -441,128 +639,178 @@
             return `${role}${context}${questionText}${optionsText}${typeInstruction}${formatInstruction}`;
         },
 
-        /**
-         * Builds a multi-turn contents array for retry.
-         * Turn 1 (user):  original prompt
-         * Turn 2 (model): the failed AI response
-         * Turn 3 (user):  type-specific correction instruction
-         */
-        _buildRetryContents: (originalPrompt, failedResponse, questionType) => {
+        _buildRetryContents: (originalPrompt, failedResponse, questionType, validationErrorMsg = '') => {
             let retryMessage;
             if (questionType === 'select') retryMessage = PROMPTS.RETRY_MATCHING;
             else if (questionType === 'shortanswer') retryMessage = PROMPTS.RETRY_SHORTANSWER;
             else retryMessage = PROMPTS.RETRY_INDICES;
 
+            const errorContext = validationErrorMsg
+                ? `<validation_error>\nYour previous response failed validation with the following exact error:\n"${validationErrorMsg}"\n</validation_error>\n\n`
+                : '';
+
             return [
                 { role: 'user', parts: [{ text: originalPrompt }] },
-                { role: 'model', parts: [{ text: failedResponse }] },
-                { role: 'user', parts: [{ text: retryMessage }] },
+                { role: 'model', parts: [{ text: String(failedResponse || '') }] },
+                { role: 'user', parts: [{ text: `${errorContext}${retryMessage}` }] },
             ];
         },
 
-        /**
-         * Sends a request to the Gemini API with the given contents.
-         * Returns { ok: true, text } on success, or { ok: false, status } on failure.
-         */
         _callModel: async (modelName, contents, apiKey) => {
             const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
             const payload = {
                 contents,
-                generationConfig: { temperature: parseFloat(CONFIG.TEMPERATURE) || 0.2 } // Fallback
+                generationConfig: { temperature: parseFloat(CONFIG.TEMPERATURE) || 0.2 }
             };
 
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.REQUEST_TIMEOUT_MS);
 
-            if (response.status === 200) {
-                const responseData = await response.json();
-                if (!responseData.candidates?.[0]) throw new Error("Empty AI response (safety block or quota)");
-                return { ok: true, text: responseData.candidates[0].content.parts[0].text.trim() };
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+
+                if (response.status === 200) {
+                    const responseData = await response.json();
+                    const candidate = responseData.candidates?.[0];
+                    const parts = candidate?.content?.parts;
+
+                    if (!parts || !Array.isArray(parts) || parts.length === 0) {
+                        const reason = candidate?.finishReason || 'UNKNOWN';
+                        return { ok: false, status: 503, reason: `Empty AI response (finishReason: ${reason})` };
+                    }
+
+                    // Filter out thinking parts if model returns thought tokens
+                    const nonThoughtParts = parts.filter(p => !p.thought && typeof p.text === 'string');
+                    const textParts = nonThoughtParts.length > 0 ? nonThoughtParts : parts.filter(p => typeof p.text === 'string');
+                    const finalText = textParts.map(p => p.text).join('\n').trim();
+
+                    if (!finalText) {
+                        return { ok: false, status: 503, reason: 'Empty text in AI response parts' };
+                    }
+
+                    return { ok: true, text: finalText };
+                }
+
+                return { ok: false, status: response.status };
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    return { ok: false, status: 503, reason: 'Request timed out' };
+                }
+                return { ok: false, status: 503, reason: err.message || 'Network error' };
+            } finally {
+                clearTimeout(timeoutId);
             }
-
-            return { ok: false, status: response.status };
         },
 
-        /**
-         * First attempt: single-turn request.
-         */
-        evaluateQuestion: async (questionData, attempt = 1) => {
-            const apiKey = Utils.getApiKey().trim();
+        evaluateQuestion: async (questionData) => {
             const prompt = AIClient._buildPrompt(questionData);
             const contents = [{ role: 'user', parts: [{ text: prompt }] }];
+            return await AIClient._executeWithResilience(contents);
+        },
 
-            return await AIClient._executeWithModelLogic(CONFIG.MODEL, contents, apiKey, questionData, attempt);
+        evaluateQuestionRetry: async (questionData, originalPrompt, failedResponse, validationErrorMsg) => {
+            const contents = AIClient._buildRetryContents(originalPrompt, failedResponse, questionData.type, validationErrorMsg);
+            return await AIClient._executeWithResilience(contents);
         },
 
         /**
-         * Retry attempts: multi-turn request with history.
+         * Executes the request across Key_i(Primary) -> Key_i(Fallback) -> Key_{i+1}(Primary)...
+         * If all pairs fail (429 / 503), enters Exponential Backoff (5s -> 10s -> 20s -> 40s -> 80s -> 120s + Jitter).
          */
-        evaluateQuestionRetry: async (questionData, originalPrompt, failedResponse, attempt = 1) => {
-            const apiKey = Utils.getApiKey().trim();
-            const contents = AIClient._buildRetryContents(originalPrompt, failedResponse, questionData.type);
+        _executeWithResilience: async (contents) => {
+            let lastStatus = null;
 
-            return await AIClient._executeWithModelLogic(CONFIG.MODEL, contents, apiKey, questionData, attempt);
-        },
+            for (let wave = 0; wave <= CONFIG.MAX_BACKOFF_WAVES; wave++) {
+                if (wave > 0) {
+                    const expDelay = Math.min(
+                        CONFIG.BACKOFF_MAX_MS,
+                        CONFIG.BACKOFF_BASE_MS * Math.pow(2, wave - 1)
+                    );
+                    const jitter = Utils.getRandomDelay(0, 3000);
+                    const totalWaitMs = expDelay + jitter;
 
-        /**
-         * Handles model switching (503) and rate limits (429).
-         */
-        _executeWithModelLogic: async (modelName, contents, apiKey, questionData, attempt) => {
-            const primaryResult = await AIClient._callModel(modelName, contents, apiKey);
-            if (primaryResult.ok) return primaryResult.text;
+                    Logger.warn(`All Key+Model pairs busy/overloaded (last status: ${lastStatus}). Exponential Backoff Wave ${wave}/${CONFIG.MAX_BACKOFF_WAVES}: waiting ${(totalWaitMs / 1000).toFixed(1)}s...`);
+                    await Utils.sleepWithCountdown(totalWaitMs, `Backoff W${wave}/${CONFIG.MAX_BACKOFF_WAVES}`);
+                }
 
-            // 503 = Model overloaded: retry a few times before fallback
-            if (primaryResult.status === 503) {
-                if (attempt <= CONFIG.MAX_RETRIES) {
-                    Logger.warn(`Model (${modelName}) unavailable (503). Retrying in ${CONFIG.RETRY_DELAY_MS / 1000}s... (Attempt ${attempt}/${CONFIG.MAX_RETRIES})`);
-                    await Utils.sleep(CONFIG.RETRY_DELAY_MS);
-                    return await AIClient._executeWithModelLogic(modelName, contents, apiKey, questionData, attempt + 1);
-                } else if (CONFIG.FALLBACK_MODEL) {
-                    Logger.warn(`Model (${modelName}) unavailable (503) after retries. Switching to fallback: ${CONFIG.FALLBACK_MODEL}`);
-                    const fallbackResult = await AIClient._callModel(CONFIG.FALLBACK_MODEL, contents, apiKey);
-                    if (fallbackResult.ok) return fallbackResult.text;
+                // On wave 0, respect active cooldowns; if all pairs are currently on cooldown, or on wave > 0, force-test them
+                let plan = KeyManager.buildExecutionPlan(wave > 0, wave === 0);
+                if (plan.length === 0) {
+                    // All pairs are currently on cooldown during wave 0 -> jump straight to wave 1 backoff,
+                    // or if we want to try after backoff, continue to next wave
+                    lastStatus = 'ALL_COOLING_DOWN';
+                    continue;
+                }
 
-                    throw new Error(`Both models failed. Primary: 503, Fallback (${CONFIG.FALLBACK_MODEL}): ${fallbackResult.status}`);
+                for (const step of plan) {
+                    while (IS_PAUSED) {
+                        Utils.setStatus('PAUSED', '#eab308');
+                        await Utils.sleep(500);
+                    }
+
+                    Utils.setStatus(`Key ${step.keyIndex}/${step.totalKeys} [${step.modelName}]`, '#38bdf8');
+                    const result = await AIClient._callModel(step.modelName, contents, step.apiKey);
+
+                    if (result.ok) {
+                        KeyManager.markSuccess(step.apiKey, step.modelName);
+                        Utils.setStatus(`OK: K${step.keyIndex} [${step.modelName}]`, '#10b981');
+                        return result.text;
+                    }
+
+                    lastStatus = result.status;
+
+                    if (result.status === 429) {
+                        KeyManager.markRateLimited(step.apiKey, step.modelName);
+                        continue; // Immediately try next pair in plan (e.g. Fallback on same key, or Primary on next key)
+                    }
+
+                    if (result.status === 503 || result.status >= 500) {
+                        KeyManager.markServerOverloaded(step.apiKey, step.modelName);
+                        continue; // Immediately try Fallback model or next key
+                    }
+
+                    if (result.status === 400 || result.status === 403) {
+                        KeyManager.markKeyInvalid(step.apiKey, result.status);
+                        continue; // Key is broken, try next key
+                    }
+
+                    if (result.status === 404) {
+                        Logger.warn(`Model ${step.modelName} returned 404. Trying next option in plan...`);
+                        KeyManager.markServerOverloaded(step.apiKey, step.modelName);
+                        continue;
+                    }
                 }
             }
 
-            // 429 = Rate Limit: retry after cooldown
-            if (primaryResult.status === 429 && attempt <= CONFIG.MAX_RETRIES) {
-                Logger.warn(`Rate limited (429). Retrying in ${CONFIG.RETRY_DELAY_MS / 1000}s... (Attempt ${attempt}/${CONFIG.MAX_RETRIES})`);
-                await Utils.sleep(CONFIG.RETRY_DELAY_MS);
-                return await AIClient._executeWithModelLogic(modelName, contents, apiKey, questionData, attempt + 1);
-            }
-
-            if (primaryResult.status >= 500) {
-                throw new Error(`Server Error ${primaryResult.status}: The API is unavailable.`);
-            }
-
-            throw new Error(`Unexpected API Error: HTTP ${primaryResult.status}`);
+            Utils.setStatus('API Exhausted', '#ef4444');
+            throw new Error(`All API keys and models failed after ${CONFIG.MAX_BACKOFF_WAVES} backoff waves (Last status: ${lastStatus}).`);
         }
     };
 
     const UIManipulator = {
         applySelection: async (questionData, aiResponseText) => {
             if (questionData.type === 'shortanswer') {
-                // Find strict FINAL_ANSWER tag
-                const matches = aiResponseText.match(/FINAL_ANSWER:\s*\[(.*?)\]/g);
-                if (!matches) {
+                const matches = Array.from(aiResponseText.matchAll(/FINAL_ANSWER:\s*\[(.+)\]\s*$/gm));
+                if (matches.length === 0) {
                     Logger.error("Parsing failure. AI output didn't contain FINAL_ANSWER: [x]: " + aiResponseText);
-                    throw new Error("Format error: No valid FINAL_ANSWER: [x] found in AI response.");
+                    throw new Error('Validation Error: Response did not end with the required format "FINAL_ANSWER: [Your Answer]".');
                 }
 
-                const lastMatchText = matches[matches.length - 1];
-                const contentMatch = lastMatchText.match(/FINAL_ANSWER:\s*\[(.*)\]/);
-                const parsedAnswers = contentMatch ? contentMatch[1].trim() : "";
+                const parsedAnswer = matches[matches.length - 1][1].trim();
+                if (!parsedAnswer) {
+                    throw new Error('Validation Error: The brackets inside FINAL_ANSWER: [] were empty.');
+                }
 
-                Logger.info(`Applying shortanswer text: "${parsedAnswers}"`);
+                Logger.info(`Applying shortanswer text: "${parsedAnswer}"`);
 
                 const targetInput = questionData.inputs[0];
                 if (targetInput) {
-                    targetInput.value = parsedAnswers;
+                    targetInput.value = parsedAnswer;
                     targetInput.dispatchEvent(new Event('input', { bubbles: true }));
                     targetInput.dispatchEvent(new Event('change', { bubbles: true }));
 
@@ -572,123 +820,132 @@
                         targetInput.style.border = '2px solid #10b981';
                     }
                 }
-                return [parsedAnswers];
+                return [parsedAnswer];
             }
 
-            // Find all bracketed index patterns
+            // Find all bracketed numeric index patterns
             const matches = aiResponseText.match(/\[(\d+(?:\s*,\s*\d+)*)\]/g);
-
             if (!matches) {
                 Logger.error("Parsing failure. AI output didn't contain valid indices: " + aiResponseText);
-                throw new Error("Format error: No valid indices [x] found in AI response.");
+                throw new Error('Validation Error: No bracketed index array like [0] or [0, 2] was found at the end of your response.');
             }
 
-            // Always take the LAST match, as AI usually reasons first and gives answer at the end
             const lastMatchText = matches[matches.length - 1];
             const contentMatch = lastMatchText.match(/\[(.*)\]/);
             const innerContent = contentMatch ? contentMatch[1] : "";
 
-            let parsedAnswers;
+            const parsedAnswers = innerContent
+                .split(',')
+                .map(s => parseInt(s.trim(), 10))
+                .filter(n => !isNaN(n) && n >= 0);
 
-            try {
-                // Parse the inner content: "0, 2" -> [0, 2]
-                parsedAnswers = innerContent.split(',')
-                    .map(s => parseInt(s.trim()))
-                    .filter(n => !isNaN(n) && n >= 0);
-
-                if (parsedAnswers.length === 0) {
-                    throw new Error("Format error: Parsed indices are all invalid (NaN or negative).");
-                }
-
-                // Check bounds
-                const maxIndex = questionData.inputs.length - 1;
-                const outOfBounds = parsedAnswers.filter(n => n > maxIndex);
-                if (outOfBounds.length > 0) {
-                    Logger.warn(`Indices out of bounds (max ${maxIndex}): ${outOfBounds.join(', ')}. Filtering.`);
-                    parsedAnswers = parsedAnswers.filter(n => n <= maxIndex);
-                }
-
-                if (parsedAnswers.length === 0) {
-                    throw new Error("Format error: All parsed indices were out of bounds.");
-                }
-            } catch (e) {
-                throw new Error("Format error: Failed to parse index array. " + e.message);
+            if (parsedAnswers.length === 0) {
+                throw new Error('Validation Error: Parsed index array was empty or contained invalid numbers.');
             }
 
-            Logger.info(`Applying selections: ${JSON.stringify(parsedAnswers)}`);
-
+            // TYPE 1: Matching / Select Dropdowns
             if (questionData.type === 'select') {
                 const selectNodes = questionData.inputs;
-                for (let i = 0; i < selectNodes.length; i++) {
+                if (parsedAnswers.length !== selectNodes.length) {
+                    throw new Error(
+                        `Validation Error: This matching question has exactly ${selectNodes.length} dropdowns, so your array MUST contain ${selectNodes.length} indices. However, you returned ${parsedAnswers.length} indices: [${parsedAnswers.join(', ')}].`
+                    );
+                }
+
+                // Pre-validate every dropdown's option index BEFORE mutating DOM
+                const resolvedSelections = selectNodes.map((targetSelect, i) => {
+                    const validOptions = Array.from(targetSelect.options).filter(opt =>
+                        opt.value !== "0" && opt.value !== "-1" && opt.innerText.trim() !== "" && !opt.innerText.includes("Choose") && !opt.innerText.includes("Select")
+                    );
                     const chosenIndex = parsedAnswers[i];
-                    if (chosenIndex !== undefined && chosenIndex !== null) {
-                        const targetSelect = selectNodes[i];
-
-                        // Dropdown indices usually include a "Choose..." option at index 0
-                        // Our extractAllQuestions filters out "Choose..." so the AI sees clean indices
-                        // We need to map the AI's 0-based index to the actual valid option elements
-                        const validOptions = Array.from(targetSelect.options).filter(opt =>
-                            opt.value !== "0" && opt.value !== "-1" && opt.innerText.trim() !== "" && !opt.innerText.includes("Choose") && !opt.innerText.includes("Select")
+                    if (chosenIndex < 0 || chosenIndex >= validOptions.length) {
+                        throw new Error(
+                            `Validation Error: Dropdown #${i} only has ${validOptions.length} valid choices (0-based indices 0 to ${validOptions.length - 1}), but you provided index ${chosenIndex} in [${parsedAnswers.join(', ')}].`
                         );
+                    }
+                    return { targetSelect, optionToSelect: validOptions[chosenIndex] };
+                });
 
-                        const optionToSelect = validOptions[chosenIndex];
+                Logger.info(`Applying matching selections: ${JSON.stringify(parsedAnswers)}`);
 
-                        if (optionToSelect) {
-                            targetSelect.value = optionToSelect.value;
-                            targetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                for (let i = 0; i < resolvedSelections.length; i++) {
+                    const { targetSelect, optionToSelect } = resolvedSelections[i];
+                    targetSelect.value = optionToSelect.value;
+                    targetSelect.dispatchEvent(new Event('change', { bubbles: true }));
 
-                            if (CONFIG.HIGHLIGHT_GREEN) {
-                                const styleWrapper = targetSelect.closest('.r0, .r1') || targetSelect.parentElement;
-                                if (styleWrapper) {
-                                    styleWrapper.style.transition = 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)';
-                                    styleWrapper.style.backgroundColor = 'rgba(16, 185, 129, 0.15)'; // Sophisticated emerald
-                                    styleWrapper.style.borderLeft = '4px solid #10b981';
-                                    styleWrapper.style.paddingLeft = '10px';
-                                }
-                            }
-                        } else {
-                            Logger.warn(`Option at index ${chosenIndex} not found for dropdown ${i}.`);
-                        }
-
-                        if (i < selectNodes.length - 1) {
-                            const jitter = Utils.getRandomDelay(CONFIG.DELAY_BETWEEN_CLICKS_MIN, CONFIG.DELAY_BETWEEN_CLICKS_MAX);
-                            await Utils.sleep(jitter);
+                    if (CONFIG.HIGHLIGHT_GREEN) {
+                        const styleWrapper = targetSelect.closest('.r0, .r1') || targetSelect.parentElement;
+                        if (styleWrapper) {
+                            styleWrapper.style.transition = 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)';
+                            styleWrapper.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+                            styleWrapper.style.borderLeft = '4px solid #10b981';
+                            styleWrapper.style.paddingLeft = '10px';
                         }
                     }
+
+                    if (i < resolvedSelections.length - 1) {
+                        const jitter = Utils.getRandomDelay(CONFIG.DELAY_BETWEEN_CLICKS_MIN, CONFIG.DELAY_BETWEEN_CLICKS_MAX);
+                        await Utils.sleep(jitter);
+                    }
                 }
+
                 return parsedAnswers;
-            } else {
-                // Radio or Checkbox logic
-                let parsedIndexes = parsedAnswers;
-                if (questionData.type === 'radio' && parsedIndexes.length > 1) {
-                    parsedIndexes = [parsedIndexes[0]]; // force single choice if AI hallucinates
-                }
+            }
 
-                const inputNodes = questionData.inputs;
-                for (const index of parsedIndexes) {
-                    if (index >= 0 && index < inputNodes.length) {
-                        const targetNode = inputNodes[index];
+            // TYPE 2: Radio or Checkbox
+            const inputNodes = questionData.inputs;
+            const maxIndex = inputNodes.length - 1;
+            const outOfBounds = parsedAnswers.filter(n => n > maxIndex);
+            if (outOfBounds.length > 0) {
+                throw new Error(
+                    `Validation Error: Option index ${outOfBounds.join(', ')} is out of bounds. This question has ${inputNodes.length} options, so valid 0-based indices are 0 to ${maxIndex}.`
+                );
+            }
 
-                        targetNode.click();
+            let parsedIndexes = Array.from(new Set(parsedAnswers));
+            if (questionData.type === 'radio' && parsedIndexes.length > 1) {
+                parsedIndexes = [parsedIndexes[0]];
+            }
 
-                        if (CONFIG.HIGHLIGHT_GREEN) {
-                            const styleWrapper = targetNode.closest('.r0, .r1, .answer > div') || targetNode.parentElement;
-                            if (styleWrapper) {
-                                styleWrapper.style.transition = 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)';
-                                styleWrapper.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
-                                styleWrapper.style.borderLeft = '4px solid #10b981';
-                                styleWrapper.style.paddingLeft = '10px';
-                            }
-                        }
+            Logger.info(`Applying selections: ${JSON.stringify(parsedIndexes)}`);
 
-                        if (parsedIndexes.length > 1) {
-                            const jitter = Utils.getRandomDelay(CONFIG.DELAY_BETWEEN_CLICKS_MIN, CONFIG.DELAY_BETWEEN_CLICKS_MAX);
-                            await Utils.sleep(jitter);
-                        }
+            if (questionData.type === 'checkbox') {
+                // First uncheck any pre-checked boxes that are NOT in parsedIndexes
+                for (let idx = 0; idx < inputNodes.length; idx++) {
+                    if (inputNodes[idx].checked && !parsedIndexes.includes(idx)) {
+                        inputNodes[idx].click();
+                        await Utils.sleep(150);
                     }
                 }
-                return parsedIndexes;
             }
+
+            for (const index of parsedIndexes) {
+                const targetNode = inputNodes[index];
+                if (!targetNode) continue;
+
+                if (questionData.type === 'checkbox') {
+                    if (!targetNode.checked) targetNode.click();
+                } else {
+                    targetNode.click();
+                }
+
+                if (CONFIG.HIGHLIGHT_GREEN) {
+                    const styleWrapper = targetNode.closest('.r0, .r1, .answer > div') || targetNode.parentElement;
+                    if (styleWrapper) {
+                        styleWrapper.style.transition = 'all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1)';
+                        styleWrapper.style.backgroundColor = 'rgba(16, 185, 129, 0.15)';
+                        styleWrapper.style.borderLeft = '4px solid #10b981';
+                        styleWrapper.style.paddingLeft = '10px';
+                    }
+                }
+
+                if (parsedIndexes.length > 1) {
+                    const jitter = Utils.getRandomDelay(CONFIG.DELAY_BETWEEN_CLICKS_MIN, CONFIG.DELAY_BETWEEN_CLICKS_MAX);
+                    await Utils.sleep(jitter);
+                }
+            }
+
+            return parsedIndexes;
         },
 
         triggerNavigation: () => {
@@ -757,19 +1014,21 @@
         _injectStyles: () => {
             const css = `
                 #ai-config-panel {
-                    position: fixed; top: 10px; right: 10px; width: 220px;
+                    position: fixed; top: 10px; right: 10px; width: 235px;
                     background: #0f172a; border: 1px solid #334155; border-radius: 0px;
                     color: #fff; font-family: monospace; color-scheme: dark;
                     z-index: 10000; padding: 10px;
                 }
                 #ai-config-panel.minimized { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; }
-                #ai-config-panel h3 { margin: 0 0 8px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 4px; text-transform: uppercase; }
+                #ai-config-panel h3 { margin: 0 0 6px; font-size: 11px; color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 4px; text-transform: uppercase; }
+                #ai-status-text { font-size: 9px; color: #94a3b8; margin-bottom: 8px; padding: 3px 4px; background: #1e293b; border-left: 2px solid #38bdf8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
                 .config-row { margin-bottom: 6px; display: flex; flex-direction: column; }
                 .config-row label { font-size: 9px; color: #64748b; margin-bottom: 2px; }
-                .config-row select, .config-row input {
+                .config-row select, .config-row input, .config-row textarea {
                     background: #1e293b; border: 1px solid #334155;
-                    border-radius: 0; color: #38bdf8; padding: 3px; font-size: 10px; outline: none;
+                    border-radius: 0; color: #38bdf8; padding: 3px; font-size: 10px; outline: none; font-family: monospace;
                 }
+                .config-row textarea { resize: vertical; min-height: 34px; max-height: 90px; }
                 .config-row input[type="number"]::-webkit-inner-spin-button {
                     opacity: 1; filter: invert(0.8); cursor: pointer;
                 }
@@ -797,30 +1056,37 @@
             panel.id = 'ai-config-panel';
             if (GM_Wrapper.getValue('ai_config_minimized', false)) panel.classList.add('minimized');
 
-            const modelOptions = [
-                'gemini-3.1-flash-lite',
-                'gemini-3.5-flash',
-                'gemma-4-31b-it',
-                'gemma-4-26b-a4b-it'
-            ].map(m => `<option value="${m}" ${CONFIG.MODEL === m ? 'selected' : ''}>${m}</option>`).join('');
+            const modelOptions = AVAILABLE_MODELS
+                .map(m => `<option value="${m}" ${CONFIG.MODEL === m ? 'selected' : ''}>${m}</option>`)
+                .join('');
 
-            const fallbackOptions = [
-                'gemma-4-31b-it',
-                'gemma-4-26b-a4b-it',
-                'gemini-3.1-flash-lite'
-            ].map(m => `<option value="${m}" ${CONFIG.FALLBACK_MODEL === m ? 'selected' : ''}>${m}</option>`).join('');
+            const fallbackOptions = AVAILABLE_MODELS
+                .map(m => `<option value="${m}" ${CONFIG.FALLBACK_MODEL === m ? 'selected' : ''}>${m}</option>`)
+                .join('');
 
             panel.innerHTML = `
                 <div id="ai-gui-toggle" style="cursor:pointer; font-size:14px; margin-bottom: 5px;">${GM_Wrapper.getValue('ai_config_minimized', false) ? '⚙️' : '[HIDE]'}</div>
                 <div id="ai-config-content">
-                    <h3>SOLVER v1.6.0</h3>
+                    <h3>SOLVER v1.7.0</h3>
+                    <div id="ai-status-text">Idle</div>
                     <div class="config-row">
-                        <label>Primary</label>
+                        <label>Primary Model</label>
                         <select class="cfg-auto" id="cfg-model">${modelOptions}</select>
                     </div>
                     <div class="config-row">
-                        <label>Fallback</label>
+                        <label>Fallback Model</label>
                         <select class="cfg-auto" id="cfg-fb-model">${fallbackOptions}</select>
+                    </div>
+                    <div class="config-row">
+                        <label>API Keys (1 per line)</label>
+                        <textarea class="cfg-auto" id="cfg-keys" rows="2" placeholder="Paste Gemini API keys...">${(CONFIG.API_KEYS || []).join('\n')}</textarea>
+                    </div>
+                    <div class="config-row">
+                        <label>Key Rotation</label>
+                        <select class="cfg-auto" id="cfg-key-strategy">
+                            <option value="exhaust" ${CONFIG.KEY_STRATEGY === 'exhaust' ? 'selected' : ''}>Exhaust (K1 -> K2)</option>
+                            <option value="round_robin" ${CONFIG.KEY_STRATEGY === 'round_robin' ? 'selected' : ''}>Round-Robin (Cycle)</option>
+                        </select>
                     </div>
                     <div class="config-row">
                         <label>Extra Context</label>
@@ -828,7 +1094,7 @@
                     </div>
                     <div class="config-row">
                         <label>Temperature (0.0 - 2.0)</label>
-                        <input class="cfg-auto" type="number" step="0.1" min="0" max="2" id="cfg-temp" value="${CONFIG.TEMPERATURE || 0.2}">
+                        <input class="cfg-auto" type="number" step="0.1" min="0" max="2" id="cfg-temp" value="${CONFIG.TEMPERATURE ?? 0.2}">
                     </div>
                     <div class="config-row config-check">
                         <input class="cfg-auto" type="checkbox" id="cfg-highlight" ${CONFIG.HIGHLIGHT_GREEN ? 'checked' : ''}>
@@ -862,11 +1128,15 @@
                 stopBtn.classList.toggle('paused', IS_PAUSED);
             };
 
-            // Auto-save on any change
             panel.querySelectorAll('.cfg-auto').forEach(el => {
                 el.addEventListener('change', () => {
                     CONFIG.MODEL = document.getElementById('cfg-model').value;
                     CONFIG.FALLBACK_MODEL = document.getElementById('cfg-fb-model').value;
+                    const parsedKeys = Utils.parseKeysInput(document.getElementById('cfg-keys').value);
+                    if (parsedKeys.length > 0) {
+                        CONFIG.API_KEYS = parsedKeys;
+                    }
+                    CONFIG.KEY_STRATEGY = document.getElementById('cfg-key-strategy').value;
                     CONFIG.EXTRA_CONTEXT = document.getElementById('cfg-context').value;
                     CONFIG.TEMPERATURE = parseFloat(document.getElementById('cfg-temp').value) || 0.2;
                     CONFIG.HIGHLIGHT_GREEN = document.getElementById('cfg-highlight').checked;
@@ -927,11 +1197,22 @@
                 for (let attempt = 1; attempt <= CONFIG.MAX_PARSE_RETRIES + 1; attempt++) {
                     let aiResponse;
 
-                    if (attempt === 1) {
-                        aiResponse = await AIClient.evaluateQuestion(questionData);
-                    } else {
-                        Logger.warn(`Parse retry ${attempt - 1}/${CONFIG.MAX_PARSE_RETRIES}...`);
-                        aiResponse = await AIClient.evaluateQuestionRetry(questionData, prompt, lastAiResponse);
+                    try {
+                        if (attempt === 1) {
+                            aiResponse = await AIClient.evaluateQuestion(questionData);
+                        } else {
+                            Logger.warn(`Parse retry ${attempt - 1}/${CONFIG.MAX_PARSE_RETRIES} (Reason: ${lastError?.message})...`);
+                            aiResponse = await AIClient.evaluateQuestionRetry(
+                                questionData,
+                                prompt,
+                                lastAiResponse,
+                                lastError?.message || ''
+                            );
+                        }
+                    } catch (apiError) {
+                        lastError = apiError;
+                        Logger.error(`API failure on Question ${i + 1}: ${apiError.message}`);
+                        break; // Do not run parse retries if the API call itself failed after all backoff waves
                     }
 
                     lastAiResponse = aiResponse;
@@ -946,15 +1227,15 @@
                         break;
                     } catch (parseError) {
                         lastError = parseError;
-                        Logger.warn(`Attempt ${attempt} failed: ${parseError.message}`);
+                        Logger.warn(`Attempt ${attempt} validation failed: ${parseError.message}`);
                     }
                 }
 
                 if (!success) {
-                    Logger.error(`All parse attempts exhausted for question ${i + 1}.`);
+                    Logger.error(`All attempts exhausted for question ${i + 1}.`);
                     Logger.persistError({
                         questionData,
-                        errorMessage: lastError.message,
+                        errorMessage: lastError?.message || 'Unknown error',
                         model: CONFIG.MODEL,
                         aiRawResponse: lastAiResponse,
                         attempt: CONFIG.MAX_PARSE_RETRIES + 1

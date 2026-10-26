@@ -1,7 +1,7 @@
 # Moodle AI Auto-Solver
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-1.6.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-1.7.0-blue.svg)]()
 
 An advanced, context-aware Tampermonkey userscript that autonomously solves Moodle quizzes using Google Gemini AI. It features multi-turn error correction, sophisticated human-like interaction delays, and a modular architecture.
 
@@ -45,7 +45,7 @@ To adapt this script for a non-Moodle platform, you only need to rewrite the `Pa
 
 ## Advanced Prompt Engineering & AI
 
-- **Multi-Turn Retry Mechanism**: If the AI returns a valid answer but fails to format it correctly (e.g., missing `[x]` brackets), the script does not crash. It sends a **multi-turn request** back to the AI, showing its own failed response and providing a strict type-specific correction prompt.
+- **Multi-Turn Retry Mechanism**: If the AI returns a valid answer but fails to format it correctly (e.g., missing `[x]` brackets), the script does not crash. It sends a **multi-turn request** back to the AI, showing its own failed response and providing a strict type-specific correction prompt with dynamic validation feedback.
 - **Anthropic-Style XML Tags**: Prompts are structured using explicit `<role>`, `<context>`, `<question>`, and `<output_format>` tags for maximum obedience.
 - **Chain-of-Thought (CoT)**: The model is explicitly instructed to reason step-by-step *before* outputting the final indices, drastically reducing hallucination rates on complex questions.
 
@@ -63,19 +63,32 @@ To adapt this script for a non-Moodle platform, you only need to rewrite the `Pa
 
 1. **Install a Userscript Manager**: Get [Tampermonkey](https://www.tampermonkey.net/).
 2. **Add Script**: Copy the contents of `src/moodle-ai-solver.user.js` into a new Tampermonkey script.
-3. **API Key**: Ensure you have a free [Google Gemini API Key](https://aistudio.google.com/). The script will prompt you for it on first run.
+3. **API Keys**: Ensure you have one or more free [Google Gemini API Keys](https://aistudio.google.com/). The script will prompt you for them on first run, or you can paste multiple keys in the GUI panel (one per line).
 
 ### GUI Configuration
 The script injects a floating UI panel in the top-right corner of Moodle quizzes.
-- **Primary & Fallback Models**: Seamlessly switch between models like `gemini-3.1-flash-lite` and `gemma-4-31b-it`.
+- **Primary & Fallback Models**: Choose from the modern model roster:
+  - `gemini-3.5-flash-lite` *(Default Primary)*
+  - `gemini-3.1-flash-lite` *(Default Fallback)*
+  - `gemma-4-31b-it`
+  - `gemma-4-26b-a4b-it`
+  - `gemini-3.8-flash`
+- **Multi-Key Management & Rotation**:
+  - Configure multiple API keys in the textarea (one per line or comma-separated).
+  - **Exhaust (`K1 -> K2`)**: Tests `K1(Primary) -> K1(Fallback) -> K2(Primary) -> K2(Fallback)...`. Automatically returns to Primary once its cooldown expires.
+  - **Round-Robin (`Cycle`)**: Alternates starting keys across questions to balance load when solving multiple tests in parallel across 3+ browser tabs.
+- **Adaptive Cooldowns & Exponential Backoff with Jitter**:
+  - Rate limits (`429`) trigger adaptive cooldowns per `(key, model)` pair (`60s -> 300s -> 900s -> 3600s`).
+  - Server overload (`503`) triggers a temporary 20s cooldown so the script immediately fails over to the Fallback model before returning to Primary.
+  - If all available keys and models are saturated, the script enters an Exponential Backoff loop with jitter (`5s -> 10s -> 20s -> 40s -> 80s -> 120s`), displaying a live countdown in the status bar (`#ai-status-text`).
 - **Extra Context**: Inject specific knowledge (e.g., "This quiz is about Spring Framework Annotations") into the prompt dynamically.
 - **Temperature Control**: Adjust the model's temperature (default `0.2`) to enforce strict formatting compliance without sacrificing reasoning capabilities.
 - **Auto-Submit**: Toggle automatic test submission on the summary page.
 
-### Troubleshooting
-**Error: `Routine failed: Unexpected API Error: HTTP 404`**
-If you see this error in the console after updating the script to a new version, it is likely because an outdated model name (e.g., `gemini-3.1-flash-lite-preview`) is still cached in your browser's local storage.
-* **Fix**: Open the script's GUI panel on the Moodle page, change the **Primary** model to any other option, and then switch it back to your desired model. This simple toggle forces the script to overwrite the old cached configuration with the newly available model names.
+### Automatic Migration & Self-Healing
+If you previously used an older version of the script, v1.7.0 automatically:
+- Migrates your legacy single API key (`gemini_api_key`) into the new multi-key array (`CONFIG.API_KEYS`).
+- Self-heals deprecated cached model names (e.g. `gemini-3.1-flash-lite-preview` -> `gemini-3.1-flash-lite`, `gemini-3.5-flash` -> `gemini-3.5-flash-lite`, or unknown names -> defaults) to prevent HTTP 404 errors.
 
 ---
 
