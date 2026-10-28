@@ -207,20 +207,31 @@
     const GM_Wrapper = {
         getValue: (key, defaultValue) => {
             let val;
-            if (typeof GM_getValue !== 'undefined') val = GM_getValue(key);
-            else val = localStorage.getItem(key);
-
-            if (!val) return defaultValue;
-            try {
-                return JSON.parse(val);
-            } catch (e) {
-                return val || defaultValue;
+            if (typeof GM_getValue !== 'undefined') val = GM_getValue(key, defaultValue);
+            else if (typeof localStorage !== 'undefined') {
+                const raw = localStorage.getItem(key);
+                val = raw !== null ? raw : defaultValue;
+            } else {
+                val = defaultValue;
             }
+
+            if (val === undefined || val === null) return defaultValue;
+            if (typeof val === 'string') {
+                try {
+                    return JSON.parse(val);
+                } catch (e) {
+                    return val;
+                }
+            }
+            return val;
         },
         setValue: (key, value) => {
-            const strValue = JSON.stringify(value);
-            if (typeof GM_setValue !== 'undefined') GM_setValue(key, strValue);
-            else localStorage.setItem(key, strValue);
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(key, value);
+            } else if (typeof localStorage !== 'undefined') {
+                const strValue = typeof value === 'string' ? value : JSON.stringify(value);
+                localStorage.setItem(key, strValue);
+            }
         }
     };
 
@@ -294,13 +305,24 @@
             }
         },
 
+        getValidSelectOptions: (selectNode) => {
+            return Array.from(selectNode.options).filter(opt => {
+                const val = opt.value !== undefined ? String(opt.value).trim() : '';
+                const text = (opt.innerText || opt.textContent || '').trim();
+                return val !== '' && val !== '0' && val !== '-1' && !opt.disabled && text !== '';
+            });
+        },
+
         sleepWithCountdown: async (totalMs, labelPrefix = 'Waiting') => {
             let remainingMs = totalMs;
             while (remainingMs > 0) {
+                if (!STATE.isRoutineRunning) break;
                 while (IS_PAUSED) {
                     Utils.setStatus('PAUSED', '#eab308');
                     await Utils.sleep(500);
+                    if (!STATE.isRoutineRunning) break;
                 }
+                if (!STATE.isRoutineRunning) break;
                 const secs = Math.ceil(remainingMs / 1000);
                 Utils.setStatus(`${labelPrefix}: ${secs}s...`, '#f59e0b');
                 const step = Math.min(1000, remainingMs);
@@ -412,7 +434,8 @@
                 const questionContainer = block.querySelector('.qtext');
                 if (!questionContainer) return null;
 
-                const questionText = questionContainer.innerText.trim().replace(/\n/g, ' ');
+                const rawQuestionText = (questionContainer.innerText || questionContainer.textContent || '').trim();
+                const questionText = rawQuestionText.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 
                 // Find all possible input methods within THIS specific block
                 const selectNodes = Array.from(block.querySelectorAll('.answer select'));
@@ -426,9 +449,8 @@
                         const itemText = textNode ? textNode.innerText.trim() : `Item ${index + 1}`;
 
                         // Filter out default empty/prompt options (placeholders)
-                        const opts = Array.from(selectNode.options)
-                            .filter(opt => opt.value !== "0" && opt.value !== "-1" && opt.innerText.trim() !== "" && !opt.innerText.includes("Choose") && !opt.innerText.includes("Select"))
-                            .map(opt => opt.innerText.trim());
+                        const validOptions = Utils.getValidSelectOptions(selectNode);
+                        const opts = validOptions.map(opt => (opt.innerText || opt.textContent || '').trim());
 
                         return `[Dropdown ${index}] Match this item: "${itemText}" | Choices count: ${opts.length} | Choices list (indices 0 to ${opts.length - 1}): [${opts.join(', ')}]`;
                     });
@@ -823,15 +845,15 @@
                 return [parsedAnswer];
             }
 
-            // Find all bracketed numeric index patterns
-            const matches = aiResponseText.match(/\[(\d+(?:\s*,\s*\d+)*)\]/g);
+            // Find all bracketed numeric index patterns (supports spaces like [ 0 ] or [ 1, 2 ])
+            const matches = aiResponseText.match(/\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]/g);
             if (!matches) {
                 Logger.error("Parsing failure. AI output didn't contain valid indices: " + aiResponseText);
                 throw new Error('Validation Error: No bracketed index array like [0] or [0, 2] was found at the end of your response.');
             }
 
             const lastMatchText = matches[matches.length - 1];
-            const contentMatch = lastMatchText.match(/\[(.*)\]/);
+            const contentMatch = lastMatchText.match(/\[\s*(.*?)\s*\]/);
             const innerContent = contentMatch ? contentMatch[1] : "";
 
             const parsedAnswers = innerContent
@@ -854,9 +876,7 @@
 
                 // Pre-validate every dropdown's option index BEFORE mutating DOM
                 const resolvedSelections = selectNodes.map((targetSelect, i) => {
-                    const validOptions = Array.from(targetSelect.options).filter(opt =>
-                        opt.value !== "0" && opt.value !== "-1" && opt.innerText.trim() !== "" && !opt.innerText.includes("Choose") && !opt.innerText.includes("Select")
-                    );
+                    const validOptions = Utils.getValidSelectOptions(targetSelect);
                     const chosenIndex = parsedAnswers[i];
                     if (chosenIndex < 0 || chosenIndex >= validOptions.length) {
                         throw new Error(
@@ -1257,19 +1277,29 @@
                 }
             }
 
+            if (!STATE.isRoutineRunning) {
+                Utils.setStatus('STOPPED', '#ef4444');
+                return;
+            }
+
             const finalWait = Utils.getRandomDelay(CONFIG.DELAY_NEXT_PAGE_MIN, CONFIG.DELAY_NEXT_PAGE_MAX);
             await Utils.sleep(finalWait);
 
             // Handle forced delay if enabled
-            if (CONFIG.ENABLE_FORCED_DELAY) {
+            if (CONFIG.ENABLE_FORCED_DELAY && STATE.isRoutineRunning) {
                 const targetDelayMs = Utils.getRandomDelay(CONFIG.MIN_PAGE_TIME_SEC, CONFIG.MAX_PAGE_TIME_SEC) * 1000;
                 const elapsedTimeMs = Date.now() - startTime;
 
                 if (elapsedTimeMs < targetDelayMs) {
                     const remainingTimeMs = targetDelayMs - elapsedTimeMs;
                     Logger.info(`Forced delay active. Waiting an additional ${(remainingTimeMs / 1000).toFixed(1)} seconds...`);
-                    await Utils.sleep(remainingTimeMs);
+                    await Utils.sleepWithCountdown(remainingTimeMs, 'Forced Page Delay');
                 }
+            }
+
+            if (!STATE.isRoutineRunning) {
+                Utils.setStatus('STOPPED', '#ef4444');
+                return;
             }
 
             UIManipulator.triggerNavigation();
