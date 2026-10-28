@@ -316,13 +316,10 @@
         sleepWithCountdown: async (totalMs, labelPrefix = 'Waiting') => {
             let remainingMs = totalMs;
             while (remainingMs > 0) {
-                if (!STATE.isRoutineRunning) break;
                 while (IS_PAUSED) {
                     Utils.setStatus('PAUSED', '#eab308');
                     await Utils.sleep(500);
-                    if (!STATE.isRoutineRunning) break;
                 }
-                if (!STATE.isRoutineRunning) break;
                 const secs = Math.ceil(remainingMs / 1000);
                 Utils.setStatus(`${labelPrefix}: ${secs}s...`, '#f59e0b');
                 const step = Math.min(1000, remainingMs);
@@ -1277,16 +1274,16 @@
                 }
             }
 
-            if (!STATE.isRoutineRunning) {
-                Utils.setStatus('STOPPED', '#ef4444');
-                return;
+            while (IS_PAUSED) {
+                Utils.setStatus('PAUSED', '#eab308');
+                await Utils.sleep(500);
             }
 
             const finalWait = Utils.getRandomDelay(CONFIG.DELAY_NEXT_PAGE_MIN, CONFIG.DELAY_NEXT_PAGE_MAX);
             await Utils.sleep(finalWait);
 
             // Handle forced delay if enabled
-            if (CONFIG.ENABLE_FORCED_DELAY && STATE.isRoutineRunning) {
+            if (CONFIG.ENABLE_FORCED_DELAY) {
                 const targetDelayMs = Utils.getRandomDelay(CONFIG.MIN_PAGE_TIME_SEC, CONFIG.MAX_PAGE_TIME_SEC) * 1000;
                 const elapsedTimeMs = Date.now() - startTime;
 
@@ -1297,9 +1294,9 @@
                 }
             }
 
-            if (!STATE.isRoutineRunning) {
-                Utils.setStatus('STOPPED', '#ef4444');
-                return;
+            while (IS_PAUSED) {
+                Utils.setStatus('PAUSED', '#eab308');
+                await Utils.sleep(500);
             }
 
             UIManipulator.triggerNavigation();
