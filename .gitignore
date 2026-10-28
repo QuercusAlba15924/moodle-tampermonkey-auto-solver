@@ -4,12 +4,17 @@ node_modules/
 # Logs
 *.log
 
-# macOS
+# macOS & System
 .DS_Store
+Thumbs.db
 
-# Temporary files
+# Temporary & scratch files
+temp/
+.tmp/
 merged_result.txt
-temp/*
 
-# Environment variables (testing)
+# Environment variables and secrets
 .env
+.env.*
+.env*.local
+!.env.example

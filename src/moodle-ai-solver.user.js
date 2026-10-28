@@ -4,7 +4,7 @@
 // @version      1.7.0
 // @description  Optimized Moodle solver with context awareness, forced delays, and modal auto-submit.
 // @author       QuercusAlba15924
-// @author       Gemini 3.1 Pro, Gemini 3.0 Flash, Claude 4.6 Opus Thinking
+// @author       Gemini 3.1 Pro, Gemini 3.0 Flash, Claude 4.6 Opus Thinking, Gemini 3.8 Flash, Gemini 4 Argon
 // @match        *://*/*mod/quiz/attempt.php*
 // @match        *://*/*mod/quiz/summary.php*
 // @grant        GM_xmlhttpRequest

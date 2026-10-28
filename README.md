@@ -24,30 +24,89 @@ Putin idi nachui.
 
 ## Architecture & Universal Design
 
-This script is built using strict **Separation of Concerns**. If Moodle changes its HTML structure, or if you want to port this solver to another LMS (like Canvas or Blackboard), you do **not** need to touch the AI logic.
+This script is built using strict **Separation of Concerns**. If Moodle changes its HTML structure, or if you want to port this solver to another LMS (like Canvas, Blackboard, or Brightspace), you do **not** need to touch the AI logic or failover engine.
 
-The pipeline consists of three decoupled modules:
+```mermaid
+flowchart TD
+    A["Moodle DOM (.que, .qtext, .answer)"] --> B["PageParser (Data Extraction)"]
+    B -->|"Normalized JSON"| C["AIClient (Prompt & Reasoning)"]
+    C <-->|"Multi-Key Smart Traversal"| D["KeyManager (Keys & Cooldowns)"]
+    D <-->|"HTTPS fetch (generateContent)"| E["Google Generative Language API"]
+    C -->|"Candidate Response"| F["UIManipulator (Atomic Validation)"]
+    F -->|"Human-Like Clicks & Delays"| G["DOM Mutation (Inputs & Selects)"]
+    H["ConfigUI (Overlay Panel)"] <-->|"Live Settings & Status"| C
+```
+
+The pipeline consists of five decoupled modules:
 
 1. **`PageParser` (Data Extraction)**
    - The *only* module that knows about Moodle's DOM (`.que`, `.qtext`, `.answer`).
-   - Parses the page and normalizes questions into a standard JSON object `{ type, subject, text, options, inputs }`.
-2. **`AIClient` (Reasoning)**
-   - Ignorant of the DOM. Takes the normalized JSON and constructs advanced prompts.
-   - Handles multi-turn API calls, rate limits (429), and fallbacks (503).
-3. **`UIManipulator` (Execution)**
-   - Takes the AI's output array (e.g., `[0, 2]`) and interacts with the DOM elements found by the `PageParser`.
-   - Simulates human behavior (scrolling, highlighting, delayed clicking).
-
-### Extensibility: Porting to a new LMS
-To adapt this script for a non-Moodle platform, you only need to rewrite the `PageParser.extractAllQuestions()` function to match the new platform's CSS selectors. The AI logic will adapt automatically.
+   - Normalizes questions into standard JSON objects: `{ type, subject, title, text, options, inputs }`.
+2. **`KeyManager` (Multi-Key Load Balancing & Failover)**
+   - Manages arbitrary sets of Google Gemini API keys with cross-tab state synchronization (`GM_getValue` / `GM_setValue`).
+   - Coordinates per-`(key, model)` adaptive strikes, cooldown schedules, and invalid key isolation.
+3. **`AIClient` (Reasoning & Resilience)**
+   - Constructs XML-structured prompts (`<role>`, `<context>`, `<question>`, `<options>`, `<instructions>`, `<output_format>`).
+   - Implements multi-turn error recovery, request timeouts (`30s`), and exponential backoff waves.
+4. **`UIManipulator` (Execution & Interaction)**
+   - Validates candidate answer indices atomically **before** mutating any DOM elements.
+   - Simulates realistic human behavior (stochastic delays, smooth focus scrolling, option highlighting, and automated quiz submission).
+5. **`ConfigUI` (Live Control Panel & Status Feed)**
+   - Injects a responsive floating HUD (`#ai-config-panel`) with real-time status reporting (`#ai-status-text`), model selectors, multi-key editor, and pause/resume controls.
 
 ---
 
-## Advanced Prompt Engineering & AI
+## High-Availability Multi-Key Engine (v1.7.0)
 
-- **Multi-Turn Retry Mechanism**: If the AI returns a valid answer but fails to format it correctly (e.g., missing `[x]` brackets), the script does not crash. It sends a **multi-turn request** back to the AI, showing its own failed response and providing a strict type-specific correction prompt with dynamic validation feedback.
-- **Anthropic-Style XML Tags**: Prompts are structured using explicit `<role>`, `<context>`, `<question>`, and `<output_format>` tags for maximum obedience.
-- **Chain-of-Thought (CoT)**: The model is explicitly instructed to reason step-by-step *before* outputting the final indices, drastically reducing hallucination rates on complex questions.
+### 1. Smart Traversal: `Key_i(Primary) -> Key_i(Fallback)`
+Instead of cycling through all keys on a single model, the solver prioritizes finishing each key's full capabilities before switching credentials:
+$$\text{Key}_1(\text{Primary}) \longrightarrow \text{Key}_1(\text{Fallback}) \longrightarrow \text{Key}_2(\text{Primary}) \longrightarrow \text{Key}_2(\text{Fallback}) \dots$$
+Once a key's temporary cooldown expires, the engine automatically routes new questions back to `Key_1(Primary)`.
+
+### 2. Rotation Strategies
+- **`Exhaust` (`K1 -> K2`, Default)**: Maximizes quota on the fastest/highest-tier key first. Falls back to subsequent keys only when rate limits or server overloads are encountered.
+- **`Round-Robin` (`Cycle`)**: Rotates the starting key index across successive questions. Ideal for running multiple simultaneous quiz attempts across 3+ browser tabs without exceeding per-minute rate limits.
+
+### 3. Adaptive Cooldown Schedule (Per Key + Model Pair)
+Cooldowns are tracked independently for every `(key, model)` pair rather than penalizing an entire API key:
+
+| Event / HTTP Code | Cooldown Duration | Behavior / Notes |
+| :--- | :--- | :--- |
+| **`429` (Strike 1)** | **60 seconds** | Short RPM (Requests Per Minute) backoff. |
+| **`429` (Strike 2)** | **300 seconds (5 min)** | Sustained quota mitigation. |
+| **`429` (Strike 3)** | **900 seconds (15 min)** | High-tier rate limit backoff. |
+| **`429` (Strike 4+)** | **3600 seconds (1 hour)** | Daily limit (RPD) protection. |
+| **`503` / `500` / Timeout** | **20 seconds** | Fast failover to Fallback model; retries Primary soon after. |
+| **`400` / `403` (Invalid Key)** | **3600 seconds (1 hour)** | Key marked globally disabled for the session. |
+| **`200 OK` (Success)** | **0 seconds** | Immediately resets strikes and cooldowns to 0. |
+
+### 4. Exponential Backoff with Jitter
+If all configured keys and models are temporarily saturated in a wave, the solver enters an automated Exponential Backoff loop across waves ($W = 1 \dots 6$):
+$$\text{Delay}(W) = \min(120000\text{ms}, 5000\text{ms} \times 2^{W-1}) + \text{RandomJitter}(0\dots 3000\text{ms})$$
+The status bar (`#ai-status-text`) displays a live second-by-second countdown (e.g. `Backoff W1/6: 6s...`), keeping you informed without crashing.
+
+---
+
+## Supported Models
+
+The solver includes a pre-validated roster of Google Gemini and Gemma models:
+
+| Model ID | Display Name | Role | Context Window |
+| :--- | :--- | :--- | :--- |
+| `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | **Default Primary** | 1,048,576 tokens |
+| `gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | **Default Fallback** | 1,048,576 tokens |
+| `gemma-4-31b-it` | Gemma 4 31B IT | Supported / High Accuracy | 262,144 tokens |
+| `gemma-4-26b-a4b-it` | Gemma 4 26B A4B IT | Supported / Balanced | 262,144 tokens |
+| `gemini-3.8-flash` | Gemini 3.8 Flash | Supported / Flagship Speed | 1,048,576 tokens |
+
+---
+
+## Advanced Prompt Engineering & Resilience
+
+- **Dynamic Validation Error Feedback**: If an AI candidate fails formatting or choices out-of-bounds validation, the script initiates a multi-turn retry with the exact reason passed inside `<validation_error>`, guiding the model to self-correct.
+- **Atomic DOM Validation**: For matching and select dropdowns, all indices are validated against target option boundaries *before* any click or change event is dispatched.
+- **Checkbox State Integrity**: Verifies element `.checked` state before dispatching clicks to ensure options are never accidentally toggled off during page reloads.
+- **Bracket Parsing Resilience**: Short-answer extraction uses `/FINAL_ANSWER:\s*\[(.+)\]\s*$/gm`, cleanly supporting programming answers containing nested brackets (e.g. `int[]`, `List<String>`).
 
 ---
 
@@ -61,40 +120,32 @@ To adapt this script for a non-Moodle platform, you only need to rewrite the `Pa
 
 ## Installation & Usage
 
-1. **Install a Userscript Manager**: Get [Tampermonkey](https://www.tampermonkey.net/).
-2. **Add Script**: Copy the contents of `src/moodle-ai-solver.user.js` into a new Tampermonkey script.
-3. **API Keys**: Ensure you have one or more free [Google Gemini API Keys](https://aistudio.google.com/). The script will prompt you for them on first run, or you can paste multiple keys in the GUI panel (one per line).
+1. **Install a Userscript Manager**: Install [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Firefox, Edge, Safari).
+2. **Add Script**: Copy the contents of [`src/moodle-ai-solver.user.js`](src/moodle-ai-solver.user.js) into a new Tampermonkey script.
+3. **API Keys**: Ensure you have one or more free [Google Gemini API Keys](https://aistudio.google.com/). The script will prompt you on first run, or you can paste multiple keys directly into the floating GUI panel.
 
 ### GUI Configuration
-The script injects a floating UI panel in the top-right corner of Moodle quizzes.
-- **Primary & Fallback Models**: Choose from the modern model roster:
-  - `gemini-3.5-flash-lite` *(Default Primary)*
-  - `gemini-3.1-flash-lite` *(Default Fallback)*
-  - `gemma-4-31b-it`
-  - `gemma-4-26b-a4b-it`
-  - `gemini-3.8-flash`
-- **Multi-Key Management & Rotation**:
-  - Configure multiple API keys in the textarea (one per line or comma-separated).
-  - **Exhaust (`K1 -> K2`)**: Tests `K1(Primary) -> K1(Fallback) -> K2(Primary) -> K2(Fallback)...`. Automatically returns to Primary once its cooldown expires.
-  - **Round-Robin (`Cycle`)**: Alternates starting keys across questions to balance load when solving multiple tests in parallel across 3+ browser tabs.
-- **Adaptive Cooldowns & Exponential Backoff with Jitter**:
-  - Rate limits (`429`) trigger adaptive cooldowns per `(key, model)` pair (`60s -> 300s -> 900s -> 3600s`).
-  - Server overload (`503`) triggers a temporary 20s cooldown so the script immediately fails over to the Fallback model before returning to Primary.
-  - If all available keys and models are saturated, the script enters an Exponential Backoff loop with jitter (`5s -> 10s -> 20s -> 40s -> 80s -> 120s`), displaying a live countdown in the status bar (`#ai-status-text`).
-- **Extra Context**: Inject specific knowledge (e.g., "This quiz is about Spring Framework Annotations") into the prompt dynamically.
-- **Temperature Control**: Adjust the model's temperature (default `0.2`) to enforce strict formatting compliance without sacrificing reasoning capabilities.
-- **Auto-Submit**: Toggle automatic test submission on the summary page.
+The script injects a floating UI panel in the top-right corner of Moodle quizzes:
+- **Primary & Fallback Models**: Select preferred models from the modern roster.
+- **API Keys**: Paste one key per line (or comma-separated).
+- **Key Rotation**: Switch between `Exhaust (K1 -> K2)` and `Round-Robin (Cycle)`.
+- **Extra Context**: Inject domain knowledge dynamically (e.g. "This quiz covers Spring Boot JPA annotations").
+- **Temperature Control**: Adjust temperature (default `0.2`) to balance strict syntax compliance with deep reasoning.
+- **Highlighting**: Toggle visual green styling and smooth scroll focus.
+- **Auto-Submit**: Toggle automatic quiz submission when the summary page is reached.
+- **Forced Delay**: Simulate realistic student time-on-page (`25-30` seconds).
+- **STOP / RESUME Button**: Instantly pause the execution pipeline at any moment.
 
 ### Automatic Migration & Self-Healing
-If you previously used an older version of the script, v1.7.0 automatically:
-- Migrates your legacy single API key (`gemini_api_key`) into the new multi-key array (`CONFIG.API_KEYS`).
-- Self-heals deprecated cached model names (e.g. `gemini-3.1-flash-lite-preview` -> `gemini-3.1-flash-lite`, `gemini-3.5-flash` -> `gemini-3.5-flash-lite`, or unknown names -> defaults) to prevent HTTP 404 errors.
+If updating from an older release (v1.6.0 or earlier), v1.7.0 automatically:
+- Migrates your existing single API key (`gemini_api_key`) into the multi-key storage (`CONFIG.API_KEYS`).
+- Self-heals deprecated cached model names (e.g. `gemini-3.1-flash-lite-preview` $\to$ `gemini-3.1-flash-lite`, `gemini-3.5-flash` $\to$ `gemini-3.5-flash-lite`, or unknown names $\to$ defaults).
 
 ---
 
 ## Developer Setup & Local Testing
 
-A local Node.js test server is included to safely test the script against mock HTML templates without hitting real Moodle instances.
+A local Node.js test server is included to test against mock HTML templates without hitting real Moodle instances:
 
 ```bash
 # Install dependencies
@@ -106,8 +157,7 @@ npm start
 Navigate to `http://localhost:3000/tests/index.html` to access the testing dashboard.
 
 ### Model Discovery
-To check which Google Generative AI models are currently available via the API, you can run the built-in discovery script. I also recommend checking the Rate Limits on the “Rate Limit” page in Google AI Studio before adding a model, if you're using the free API.
-Ensure your `.env` file contains your `GEMINI_API_KEY`, then run:
+To discover which Google Generative AI models are currently available and verify the status of the v1.7.0 roster, run:
 
 ```bash
 npm run test-models
@@ -117,4 +167,4 @@ npm run test-models
 
 ## Authors & Acknowledgments
 - Concept, Testing, Implementation, and Improvements by **QuercusAlba15924**.
-- Architecture, Refactoring, Main part of code, and Prompts, Docx and a lot more by **Antigravity AI** with Gemini 3.1 Pro, Gemini 3.0 Flash, and Claude 4.6 Opus Thinking.
+- Architecture, Refactoring, Prompts, and Multi-Key Failover Engine by **Antigravity AI** with Gemini 3.1 Pro, Gemini 3.0 Flash, Claude 4.6 Opus Thinking, Gemini 3.8 Flash, and Gemini 4 Argon.
